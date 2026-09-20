@@ -37,14 +37,27 @@ LISTING_LINK_RE = re.compile(r"^/classified-(\d+)-(.+)\.html$")
 GENERIC_SITE_TITLE_SNIPPET = "barnstormers.com find aircraft"
 
 # The Great Lakes 2T-1 type-certificate family, optionally followed by a
-# factory variant suffix (A, E, LT, MS - e.g. "2T-1A", "2T-1E") and written
-# with or without spaces/hyphens ("2T-1A", "2T1A", "2 T 1 A"). No trailing
-# \b requirement on the suffix beyond what the group itself anchors, since
-# real titles often run the code straight into the next word
-# ("2T-1Abiplane") - a leading \b is enough to anchor it.
-_MODEL_CODE_RE = re.compile(r"\b2[\s-]?t[\s-]?1[\s-]?(a|e|lt|ms)?\b", re.IGNORECASE)
+# factory variant suffix (A, E, LT, MS - e.g. "2T-1A", "2T-1E") and/or a
+# trailing production-block digit (e.g. "2T-1A-2", WACO Classic Aircraft's
+# current-production designation), written with or without spaces/hyphens
+# ("2T-1A", "2T1A", "2 T 1 A"). No trailing \b requirement on the suffix
+# beyond what the group itself anchors, since real titles often run the
+# code straight into the next word ("2T-1Abiplane") - a leading \b is
+# enough to anchor it.
+_MODEL_CODE_RE = re.compile(
+    r"\b2[\s-]?t[\s-]?1[\s-]?(a|e|lt|ms)?(?:[\s-](\d))?\b", re.IGNORECASE
+)
+
+# Fallback names for listings that don't repeat a type code in the title -
+# common on this category page, since Barnstormers already scopes it to
+# Great Lakes aircraft and the type has had essentially one airframe
+# (factory-built or WACO Classic Aircraft-built) across its history, so a
+# bare "Biplane"/"Great Lakes"/"Waco Great Lakes" title is still a
+# whole-aircraft-for-sale ad, just without a stated type code.
 _MODEL_NAME_RULES = [
     (re.compile(r"sport\s*trainer", re.IGNORECASE), "Sport Trainer"),
+    (re.compile(r"\bbiplane\b", re.IGNORECASE), "Sport Trainer"),
+    (re.compile(r"\bgreat\s*lakes\b", re.IGNORECASE), "Sport Trainer"),
 ]
 
 
@@ -52,7 +65,11 @@ def _extract_model(title: str) -> tuple[str, str] | None:
     match = _MODEL_CODE_RE.search(title)
     if match:
         suffix = (match.group(1) or "").upper()
-        return MAKE, f"2T-1{suffix}"
+        variant = match.group(2)
+        model = f"2T-1{suffix}"
+        if variant:
+            model += f"-{variant}"
+        return MAKE, model
     for pattern, canonical in _MODEL_NAME_RULES:
         if pattern.search(title):
             return MAKE, canonical

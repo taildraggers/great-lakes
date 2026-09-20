@@ -17,13 +17,21 @@ browser can't drive reliably for an unattended daily job.
   visible text since the site doesn't expose structured data). The title is derived
   from the listing URL's own SEO slug, since every detail page shares one generic
   `<title>`/`<h1>`.
-- Only whole-aircraft-for-sale listings are published. Each ad's title must match the
-  Great Lakes 2T-1 type-certificate family (2T-1, 2T-1A, 2T-1E, 2T-1LT, 2T-1MS -
-  written with or without spaces/hyphens) or the "Sport Trainer" model name - see
-  `_MODEL_CODE_RE`/`_MODEL_NAME_RULES` in `scraper/barnstormers.py`; titles that read
-  as parts, accessories, services, or raffles are dropped. Every surviving listing's
-  title is rewritten to a canonical **`YEAR Great Lakes MODEL`** form when the ad
-  states a model year (e.g. `1929 Great Lakes 2T-1A`), or just **`Great Lakes MODEL`**
+- Only whole-aircraft-for-sale listings are published. Titles that read as parts,
+  accessories, services, or raffles are dropped (see `EXCLUDE_KEYWORDS` in
+  `scraper/common.py`) before anything else. Every surviving title is then matched
+  against the Great Lakes 2T-1 type-certificate family (2T-1, 2T-1A, 2T-1E, 2T-1LT,
+  2T-1MS, optionally with a trailing production-block digit like `2T-1A-2` - WACO
+  Classic Aircraft's current-production designation - written with or without
+  spaces/hyphens) - see `_MODEL_CODE_RE` in `scraper/barnstormers.py`. Most sellers in
+  this category don't repeat a type code at all, so a title with no code (e.g. a bare
+  "Biplane", "Great Lakes", or "Waco Great Lakes") still publishes under the generic
+  **Sport Trainer** model name (`_MODEL_NAME_RULES`), since the type has had
+  essentially one airframe - factory-built or WACO Classic Aircraft-built - across its
+  history and Barnstormers already scopes this category to Great Lakes aircraft.
+  Every surviving listing's title is rewritten to a canonical **`YEAR Great Lakes
+  MODEL`** form when the ad states a model year (e.g. `1929 Great Lakes 2T-1A`), or
+  just **`Great Lakes MODEL`**
   when it doesn't - a missing year isn't disqualifying, since plenty of genuine ads
   simply don't state one in the title - regardless of how the original ad was worded,
   so the page reads consistently.
