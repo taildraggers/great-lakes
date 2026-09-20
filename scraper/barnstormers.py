@@ -1,0 +1,172 @@
+"""Scraper for Great Lakes aircraft listings on barnstormers.com.
+
+Only whole-aircraft-for-sale listings are published: each ad's title is
+matched against the Great Lakes 2T-1 type-certificate family (or the
+"Sport Trainer" model name) and titles that look like parts/accessories/
+services/raffles are dropped. Surviving titles are rewritten to a
+canonical "YEAR Great Lakes MODEL" form so every listing follows the same
+format.
+"""
+from __future__ import annotations
+
+import re
+from urllib.parse import quote, unquote, urljoin, urlparse
+
+from bs4 import BeautifulSoup
+
+from .common import (
+    Listing,
+    extract_date,
+    extract_location,
+    extract_price,
+    fetch,
+    format_aircraft_title,
+)
+
+SITE_NAME = "Barnstormers.com"
+BASE = "https://www.barnstormers.com"
+MAKE = "Great Lakes"
+
+# Category pages known to carry Great Lakes listings on Barnstormers.
+CATEGORY_URLS = [
+    f"{BASE}/category-15869-Aerobatic--Great-Lakes.html",
+]
+
+MAX_PAGES = 10
+LISTING_LINK_RE = re.compile(r"^/classified-(\d+)-(.+)\.html$")
+GENERIC_SITE_TITLE_SNIPPET = "barnstormers.com find aircraft"
+
+# The Great Lakes 2T-1 type-certificate family, optionally followed by a
+# factory variant suffix (A, E, LT, MS - e.g. "2T-1A", "2T-1E") and written
+# with or without spaces/hyphens ("2T-1A", "2T1A", "2 T 1 A"). No trailing
+# \b requirement on the suffix beyond what the group itself anchors, since
+# real titles often run the code straight into the next word
+# ("2T-1Abiplane") - a leading \b is enough to anchor it.
+_MODEL_CODE_RE = re.compile(r"\b2[\s-]?t[\s-]?1[\s-]?(a|e|lt|ms)?\b", re.IGNORECASE)
+_MODEL_NAME_RULES = [
+    (re.compile(r"sport\s*trainer", re.IGNORECASE), "Sport Trainer"),
+]
+
+
+def _extract_model(title: str) -> tuple[str, str] | None:
+    match = _MODEL_CODE_RE.search(title)
+    if match:
+        suffix = (match.group(1) or "").upper()
+        return MAKE, f"2T-1{suffix}"
+    for pattern, canonical in _MODEL_NAME_RULES:
+        if pattern.search(title):
+            return MAKE, canonical
+    return None
+
+
+def _title_from_url(url: str) -> str:
+    """Listing pages share a generic <title>/<h1>, but the URL slug is the ad's own title."""
+    slug = url.rstrip("/").rsplit("/", 1)[-1]
+    match = LISTING_LINK_RE.match("/" + slug)
+    if not match:
+        return unquote(slug)
+    return unquote(match.group(2)).replace("-", " ").strip()
+
+
+def _find_listing_links(html: str) -> set[str]:
+    soup = BeautifulSoup(html, "lxml")
+    links = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"].split("?")[0]
+        if LISTING_LINK_RE.match(href):
+            links.add(urljoin(BASE, href))
+    return links
+
+
+def _page_url(category_url: str, page: int) -> str:
+    """Build a category page's URL directly.
+
+    Barnstormers' category pager renders as page-number buttons with no
+    "Next" text or rel="next" attribute for a link-following heuristic to
+    find (confirmed on the companion Van's RV, Stearman, Waco, Pitts,
+    Taylorcraft, Swift, Beech, Aeronca, and Extra repos, where that
+    approach silently stopped after page 1) - so each page's URL is built
+    from the known ?seocategory=<url-encoded-path>&page=<n> pattern
+    instead.
+    """
+    if page <= 1:
+        return category_url
+    path = urlparse(category_url).path
+    return f"{category_url}?seocategory={quote(path, safe='')}&page={page}"
+
+
+def _debug_dump_hrefs(html: str, limit: int = 25) -> None:
+    soup = BeautifulSoup(html, "lxml")
+    hrefs = [a["href"] for a in soup.find_all("a", href=True)]
+    interesting = [h for h in hrefs if "classified" in h.lower() or "great-lakes" in h.lower()]
+    sample = interesting[:limit] or hrefs[:limit]
+    print(f"  [debug] {len(hrefs)} total <a href> on page; sample: {sample}")
+
+
+def _parse_detail_page(url: str, html: str) -> Listing | None:
+    soup = BeautifulSoup(html, "lxml")
+
+    title_tag = soup.find("h1") or soup.find("title")
+    title = title_tag.get_text(strip=True) if title_tag else None
+    if title:
+        title = re.sub(r"\s*[\|\-]\s*Barnstormers.*$", "", title, flags=re.IGNORECASE).strip()
+    if not title or GENERIC_SITE_TITLE_SNIPPET in title.lower():
+        title = _title_from_url(url)
+    if not title:
+        return None
+
+    text = soup.get_text(" ", strip=True)
+
+    formatted_title = format_aircraft_title(title, text, _extract_model)
+    if not formatted_title:
+        return None
+    title = formatted_title
+
+    price = extract_price(text)
+    location = extract_location(text)
+    date_posted = extract_date(text)
+
+    return Listing(
+        title=title,
+        price=price,
+        location=location,
+        date_posted=date_posted,
+        site=SITE_NAME,
+        url=url,
+    )
+
+
+def scrape() -> list[Listing]:
+    print(f"[{SITE_NAME}] starting scrape")
+    all_links: set[str] = set()
+
+    for category_url in CATEGORY_URLS:
+        seen_this_category: set[str] = set()
+        for page in range(1, MAX_PAGES + 1):
+            url = _page_url(category_url, page)
+            html = fetch(url)
+            if not html:
+                break
+            links = _find_listing_links(html)
+            new_links = links - seen_this_category
+            print(f"  [{category_url}] page {page}: {len(links)} links ({len(new_links)} new)")
+            if page == 1 and not links:
+                _debug_dump_hrefs(html)
+            seen_this_category |= links
+            if not new_links:
+                break
+        all_links |= seen_this_category
+
+    print(f"[{SITE_NAME}] {len(all_links)} unique listing URLs found")
+
+    listings: list[Listing] = []
+    for url in sorted(all_links):
+        html = fetch(url)
+        if not html:
+            continue
+        listing = _parse_detail_page(url, html)
+        if listing:
+            listings.append(listing)
+
+    print(f"[{SITE_NAME}] parsed {len(listings)} listings")
+    return listings
